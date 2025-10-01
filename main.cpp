@@ -1,45 +1,68 @@
 // main.cpp
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/ocl.hpp>
 #include <iostream>
+#include <vector>
 
 int main() {
-    // 1. Create a VideoCapture object to connect to the default camera (index 0)
-    cv::VideoCapture cap(0);
+    if (!cv::ocl::haveOpenCL()) {
+        std::cerr << "OpenCL is not available..." << std::endl;
+        return -1;
+    }
+    cv::ocl::setUseOpenCL(true);
+    std::cout << "OpenCL is available. Proceeding with GPU acceleration via T-API." << std::endl;
 
-    // 2. Check if the camera was opened successfully
+    cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
         std::cerr << "ERROR: Could not open camera." << std::endl;
         return -1;
     }
 
-    // 3. Create a window to display the video
-    cv::namedWindow("Live Camera Feed", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("Live Camera Feed - Red Filter (OpenCL)", cv::WINDOW_AUTOSIZE);
 
-    // 4. Create a Mat object to store each frame from the camera
-    cv::Mat frame;
+    cv::Mat frame_cpu;
+    cv::UMat u_frame, u_result;
+    std::vector<cv::UMat> u_bgr_channels;
+    cv::UMat u_zero; // Will be initialized on the first frame
 
-    // 5. Loop to continuously capture and display frames
     while (true) {
-        // Read a new frame from the camera
-        bool frameReadSuccess = cap.read(frame);
-
-        // If a frame was not read successfully (e.g., camera disconnected), break the loop
-        if (!frameReadSuccess || frame.empty()) {
+        if (!cap.read(frame_cpu) || frame_cpu.empty()) {
             std::cout << "Video stream ended." << std::endl;
             break;
         }
 
-        // Display the frame in the created window
-        cv::imshow("Live Camera Feed", frame);
+        // --- GPU Processing Starts Here ---
 
-        // Wait for 30ms. If the 'ESC' key (ASCII 27) is pressed, break the loop.
-        if (cv::waitKey(30) == 27) {
+        frame_cpu.copyTo(u_frame);
+
+        // Initialize the 'zero' UMat only once
+        if (u_zero.empty()) {
+            u_zero = cv::UMat::zeros(u_frame.size(), CV_8UC1);
+        }
+
+        cv::split(u_frame, u_bgr_channels);
+
+        std::vector<cv::UMat> u_merged_channels = {
+            u_zero,
+            u_zero,
+            u_bgr_channels[2]
+        };
+
+        cv::merge(u_merged_channels, u_result);
+
+        // Get the result back to the CPU Mat for display
+        u_result.copyTo(frame_cpu); // Use copyTo for safety
+        
+        // --- GPU Processing Ends Here ---
+
+        cv::imshow("Live Camera Feed - Red Filter (OpenCL)", frame_cpu);
+
+        if (cv::waitKey(1) == 27) {
             std::cout << "ESC key pressed. Exiting." << std::endl;
             break;
         }
     }
 
-    // 6. Release the camera and destroy the window
     cap.release();
     cv::destroyAllWindows();
 
